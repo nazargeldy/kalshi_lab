@@ -30,7 +30,9 @@ def _f(d, key):
 
 def db():
     os.makedirs(os.path.dirname(DB), exist_ok=True)
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, timeout=60)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA busy_timeout=60000")
     c.executescript(SCHEMA)
     return c
 
