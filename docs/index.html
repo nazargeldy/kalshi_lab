@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kalshi Paper Trader</title>
+<style>
+*{box-sizing:border-box}
+body{background:#0d1117;color:#e6edf3;margin:0;padding:14px;
+ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+h1{font-size:18px;margin:0 0 4px}
+.sub{color:#8b949e;font-size:12px;margin-bottom:16px;line-height:1.5}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:18px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:12px 14px}
+.card .label{color:#8b949e;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.card .value{font-size:22px;font-weight:600;margin-top:5px;line-height:1.15}
+.card .value span{font-size:13px;color:#8b949e}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:14px;margin-bottom:16px}
+.panel h2{font-size:13px;margin:0 0 10px;color:#c9d1d9;text-transform:uppercase;letter-spacing:.4px}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #21262d;white-space:nowrap}
+th{color:#8b949e;font-weight:500;font-size:10.5px;text-transform:uppercase}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+td.mkt{color:#c9d1d9;max-width:46vw;overflow:hidden;text-overflow:ellipsis}
+.muted{color:#6e7681;text-align:center;padding:16px}
+.legend{color:#8b949e;font-size:11.5px;margin-top:10px;line-height:1.6}
+.warn{background:#2d2212;border:1px solid #6b4d1a;color:#e0b968;border-radius:8px;
+ padding:10px 12px;font-size:12px;margin-bottom:16px;line-height:1.5}
+@media(min-width:700px){body{padding:24px}h1{font-size:22px}.card .value{font-size:26px}td.mkt{max-width:440px}}
+@media(max-width:560px){.hide-sm{display:none}td.mkt{max-width:54vw}}
+</style></head><body>
+<h1>📈 Kalshi Paper Trader</h1>
+<div class="sub">Simulated account · funded $1,000.00 · <b>Kalshi only</b> ·
+ sized by confidence · settles on real Kalshi outcomes ·
+ <span class="muted">updated 2026-08-23 21:44 UTC</span></div>
+
+<div class="warn"><b>Paper money.</b> No real funds are at risk. This is a live
+ forward test to find out whether the alert strategy has an edge on Kalshi &mdash;
+ no edge has been validated yet, so treat these numbers as an experiment in progress,
+ not a track record.</div>
+
+<div class="cards">
+ <div class="card"><div class="label">Account Value</div><div class="value">$1,000.00</div></div>
+ <div class="card"><div class="label">Return</div><div class="value" style="color:#2ecc71">+0.0%</div></div>
+ <div class="card"><div class="label">Cash Free</div><div class="value">$950.00</div></div>
+ <div class="card"><div class="label">Signal Win Rate</div>
+   <div class="value">0.0%<span> (0/0)</span></div></div>
+ <div class="card"><div class="label">Account Trades</div>
+   <div class="value">0<span> (0W/0L)</span></div></div>
+ <div class="card"><div class="label">Max Drawdown</div>
+   <div class="value" style="color:#e0a458">-0.0%</div></div>
+ <div class="card"><div class="label">In Open Bets</div>
+   <div class="value">$50.00<span> (2)</span></div></div>
+</div>
+
+<div class="panel"><h2>Equity Curve &mdash; $1,000.00 → $1,000.00</h2>
+<div class="muted">Not enough settled trades yet to draw a curve.</div>
+<div class="legend">Sizing: 95+→5% · 90+→4% · 85+→3% &nbsp;|&nbsp; per-bet cap $50.00 &nbsp;|&nbsp;
+ per-event cap 15% of account &nbsp;|&nbsp; Kalshi fees on &nbsp;|&nbsp;
+ filters: no sports, no auto-generated, no 15-min direction markets</div></div>
+
+<div class="panel"><h2>Open Positions (2)</h2><div class="tablewrap"><table>
+<tr><th class="hide-sm">Time</th><th>Market</th><th>Side</th>
+<th class="r hide-sm">Score</th><th class="r hide-sm">Entry</th><th class="r">Stake</th></tr>
+<tr><td class="hide-sm">08-23T21:43</td><td class="mkt" title="Frances Tiafoe wins">Frances Tiafoe wins</td><td>YES</td><td class="r hide-sm">79</td><td class="r hide-sm">56¢</td><td class="r">$20.00</td></tr><tr><td class="hide-sm">08-23T21:43</td><td class="mkt" title="Bitcoin price on Aug 23, 2026?">Bitcoin price on Aug 23, 2026?</td><td>NO</td><td class="r hide-sm">85</td><td class="r hide-sm">98¢</td><td class="r">$30.00</td></tr></table></div></div>
+
+<div class="panel"><h2>Settled Trades (last 60)</h2><div class="tablewrap"><table>
+<tr><th class="hide-sm">Time</th><th></th><th>Market</th><th class="hide-sm">Side</th>
+<th class="r hide-sm">Score</th><th class="r hide-sm">Entry</th><th class="r">Stake</th>
+<th class="r">P&amp;L</th><th class="r hide-sm">Equity</th></tr>
+</table></div></div>
+</body></html>
