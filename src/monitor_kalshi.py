@@ -44,6 +44,16 @@ SIDE_FLIP_WINDOW = 24 * 3600
 POLL_SEC = 30
 BASELINE_MIN_TRADES = 8
 
+# Categories we never trade. Sports is excluded because match markets are sharp,
+# fast, and dominated by specialists. Uses Kalshi's own event category, which is
+# far more reliable than matching ticker substrings.
+BLOCKED_CATEGORIES = {"Sports"}
+
+# Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
+# 98%+ hit rate just to break even. Buying at 3c is a lottery ticket.
+MIN_ENTRY_CENTS = 12
+MAX_ENTRY_CENTS = 88
+
 JUNK_PREFIXES = ("KXMVE",)
 # Ultra-short crypto/index direction markets ("price up in next 15 mins?").
 # These are the coin-flip category that produced 39% win rate / -16% ROI in the
@@ -259,12 +269,20 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             if tk not in market_meta:
                 try:
                     m = cli.get("/trade-api/v2/markets/" + tk).get("market", {})
+                    ev_tk = m.get("event_ticker")
+                    category = None
+                    if ev_tk:
+                        try:
+                            category = cli.get("/trade-api/v2/events/" + ev_tk)                                           .get("event", {}).get("category")
+                        except Exception:
+                            category = None
                     market_meta[tk] = {
                         "title": m.get("title") or tk,
-                        "event": m.get("event_ticker"),
+                        "event": ev_tk,
                         "close": m.get("close_time"),
                         "yes_sub": m.get("yes_sub_title"),
                         "no_sub": m.get("no_sub_title"),
+                        "category": category,
                     }
                 except Exception:
                     market_meta[tk] = {"title": tk, "event": None, "close": None,
@@ -282,6 +300,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                     pass
 
             if is_direction(tk, meta.get("title")):
+                continue
+            if meta.get("category") in BLOCKED_CATEGORIES:
                 continue
 
             score, reasons, hits = base.score(tk, size, price, htc)
@@ -309,6 +329,10 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
 
             entry_c = round(price * 100) if side_dir == "YES" else round((1 - price) * 100)
+            if not (MIN_ENTRY_CENTS <= entry_c <= MAX_ENTRY_CENTS):
+                print("  PRICE skip: {} would enter at {}c".format(meta["title"][:40], entry_c))
+                market_cd[tk] = now
+                continue
             label = (meta.get("yes_sub") or "Yes") if side_dir == "YES" else (meta.get("no_sub") or "No")
             link = kalshi_url(series_of(tk), ev)
             rl = "".join("  • " + r + "\n" for r in reasons)

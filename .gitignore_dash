@@ -1,6 +1,0 @@
-data/
-*.db
-*.db-*
-.env
-*.pem
-__pycache__/
