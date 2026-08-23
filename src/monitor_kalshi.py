@@ -1,7 +1,8 @@
 """
-Kalshi-only unusual-activity monitor -> Telegram.
+Kalshi-only unusual-activity monitor.
 
-100% Kalshi. No Polymarket anywhere. Alerts link to kalshi.com.
+100% Kalshi. No Polymarket. No Telegram. Alerts are written to SQLite
+and surfaced on the dashboard only.
 
 Signals (all from Kalshi's public trade feed):
   A) Size shock      - trade size vs rolling market baseline (robust z-score)
@@ -33,8 +34,6 @@ from kalshi_client import KalshiClient
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
-TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 ALERT_THRESHOLD = 75
 DAILY_CAP = 20
@@ -109,22 +108,12 @@ def kalshi_url(series, event):
     return "https://kalshi.com/markets"
 
 
-def tg_send(text):
-    if not TG_TOKEN or not TG_CHAT:
-        print("[telegram not configured]")
-        return False
-    try:
-        r = requests.post(
-            "https://api.telegram.org/bot" + TG_TOKEN + "/sendMessage",
-            json={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=15)
-        if not r.ok:
-            print("telegram HTTP " + str(r.status_code) + ": " + r.text[:160])
-        return r.ok
-    except Exception as e:
-        print("telegram error: " + str(e))
-        return False
+def notify(text):
+    """Alert sink. Telegram was removed after the account was compromised.
+    Alerts persist to SQLite and appear on the dashboard; nothing is sent
+    to any external messaging service."""
+    print(text.replace("<b>", "").replace("</b>", ""))
+    return True
 
 
 class Baselines:
@@ -222,8 +211,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
     cap_day = datetime.now(timezone.utc).date()
 
     print("Kalshi monitor starting (threshold={}, dry_run={})".format(threshold, dry_run))
-    if not dry_run:
-        tg_send("\U0001F7E2 <b>Kalshi monitor online</b>\nWatching Kalshi markets only.")
+    print("Kalshi monitor online. Alerts -> SQLite + dashboard (no messaging).")
 
     poll = 0
     while True:
@@ -347,7 +335,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
 
             print("ALERT {:.0f} {} {}@{}c  {}".format(score, tk, side_dir, entry_c,
                                                       meta["title"][:45]))
-            ok = True if dry_run else tg_send(msg)
+            ok = True if dry_run else notify(msg)
             if ok:
                 sent_today += 1
                 con.execute(
