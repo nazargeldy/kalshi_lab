@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from kalshi_client import KalshiClient
+from notifier import notify as discord_notify
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
@@ -108,11 +109,13 @@ def kalshi_url(series, event):
     return "https://kalshi.com/markets"
 
 
-def notify(text):
-    """Alert sink. Telegram was removed after the account was compromised.
-    Alerts persist to SQLite and appear on the dashboard; nothing is sent
-    to any external messaging service."""
-    print(text.replace("<b>", "").replace("</b>", ""))
+def notify(title, body, link=None):
+    """Alert sink: stdout + Discord webhook (no account tokens involved)."""
+    print(title + " | " + body.replace(chr(10), " ")[:160])
+    try:
+        discord_notify(title, body, url=link)
+    except Exception as e:
+        print("notify error: " + str(e)[:100])
     return True
 
 
@@ -335,7 +338,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
 
             print("ALERT {:.0f} {} {}@{}c  {}".format(score, tk, side_dir, entry_c,
                                                       meta["title"][:45]))
-            ok = True if dry_run else notify(msg)
+            ok = True if dry_run else notify(title_txt, body_txt, link)
             if ok:
                 sent_today += 1
                 con.execute(
