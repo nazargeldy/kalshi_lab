@@ -1,0 +1,23 @@
+{
+  "_comment": "Per-account config. Key files live OUTSIDE any git repo in C:/Users/geldy/.kalshi_keys/ (never commit, never paste contents into chat). Paper accounts are independent simulations over the same shared alert stream: separate bankroll, cash, positions and caps, so one account can never affect the other.",
+  "accounts": [
+    {
+      "id": "main",
+      "label": "Main (Nazar)",
+      "key_id": "95a3d02c-3ab8-4227-aa9a-125636bb5068",
+      "key_path": "C:/Users/geldy/kalshi_lab/kalshi_priv.pem",
+      "paper_bankroll_cents": 100000,
+      "enabled": true,
+      "note": "ROTATE THIS KEY - exposed via the Telegram compromise. Replace with C:/Users/geldy/.kalshi_keys/main.txt once regenerated."
+    },
+    {
+      "id": "app",
+      "label": "Second account (friend funds)",
+      "key_id": "91dc037b-f904-4c88-9dde-ce2c59f24d72",
+      "key_path": "C:/Users/geldy/.kalshi_keys/App.txt",
+      "paper_bankroll_cents": 100000,
+      "enabled": true,
+      "note": "Paper only. Do not fund until the strategy clears validation."
+    }
+  ]
+}

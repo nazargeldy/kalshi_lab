@@ -29,7 +29,20 @@ from datetime import datetime, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
 
-STARTING_CENTS = 1000_00              # $1,000
+
+def load_accounts():
+    """Accounts are independent paper simulations over the SAME shared alert
+    stream. Each has its own bankroll, cash, positions and caps, so one account
+    can never influence another."""
+    import json
+    cfg = os.path.join(ROOT, "accounts.json")
+    if not os.path.exists(cfg):
+        return [{"id": "main", "label": "Main", "paper_bankroll_cents": 100000}]
+    with open(cfg, encoding="utf-8") as f:
+        return [a for a in json.load(f).get("accounts", []) if a.get("enabled", True)]
+
+
+STARTING_CENTS = 1000_00              # $1,000 default
 EVENT_CAP_PCT = 0.15                  # max 15% of account on any one event
 MAX_STAKE_CENTS = 50_00
 MIN_STAKE_CENTS = 20_00
@@ -58,16 +71,17 @@ def fmt(c):
     return "${:,.2f}".format(c / 100.0)
 
 
-def build():
+def build(starting_cents=None, label=None):
     con = sqlite3.connect(DB, timeout=30)
     rows = con.execute(
         "SELECT id, ts, ticker, event_ticker, title, side, entry_cents, score, "
         "reasons, link, result FROM alerts ORDER BY ts ASC").fetchall()
 
-    cash = STARTING_CENTS
+    start = starting_cents or STARTING_CENTS
+    cash = start
     open_pos, closed = [], []
     wins = losses = 0
-    peak = cash
+    peak = start
     max_dd = 0.0
     curve = []
     event_exposure = defaultdict(int)
@@ -132,8 +146,9 @@ def build():
 
     return {
         "stats": {
-            "equity": equity, "cash": cash, "start": STARTING_CENTS,
-            "return_pct": (equity - STARTING_CENTS) / STARTING_CENTS,
+            "equity": equity, "cash": cash, "start": start,
+            "label": label or "Main",
+            "return_pct": (equity - start) / start,
             "trades": n, "wins": wins, "losses": losses,
             "win_rate": (wins / n) if n else 0,
             "signal_n": len(sig), "signal_wins": sig_w,
@@ -146,10 +161,11 @@ def build():
     }
 
 
-def report():
-    d = build()
+def report(starting_cents=None, label=None):
+    d = build(starting_cents, label)
     s = d["stats"]
-    print("Kalshi Paper Trader  ({:%Y-%m-%d %H:%M UTC})".format(datetime.now(timezone.utc)))
+    print("Kalshi Paper Trader [{}]  ({:%Y-%m-%d %H:%M UTC})".format(
+        s.get("label", "Main"), datetime.now(timezone.utc)))
     print("  Start           : " + fmt(s["start"]))
     print("  Account value   : {}  (cash {} + open {})".format(
         fmt(s["equity"]), fmt(s["cash"]), fmt(s["open_exposure"])))
@@ -164,7 +180,7 @@ def report():
         s["total_alerts"], s["skipped_cap"]))
 
 
-def svg_curve(curve, w=920, h=220):
+def svg_curve(curve, w=920, h=220, start=None):
     if len(curve) < 2:
         return '<div class="muted">Not enough settled trades yet to draw a curve.</div>'
     vals = [c[1] for c in curve]
@@ -175,11 +191,12 @@ def svg_curve(curve, w=920, h=220):
     xs = lambda i: pad + i * (w - 2 * pad) / (n - 1)
     ys = lambda v: h - pad - (v - lo) * (h - 2 * pad) / (hi - lo)
     pts = " ".join("{:.1f},{:.1f}".format(xs(i), ys(v)) for i, v in enumerate(vals))
-    up = vals[-1] >= STARTING_CENTS
+    base_v = start or STARTING_CENTS
+    up = vals[-1] >= base_v
     col = "#2ecc71" if up else "#e74c3c"
     base = ""
-    if lo <= STARTING_CENTS <= hi:
-        by = ys(STARTING_CENTS)
+    if lo <= base_v <= hi:
+        by = ys(base_v)
         base = ('<line x1="{}" y1="{:.1f}" x2="{}" y2="{:.1f}" stroke="#555" '
                 'stroke-dasharray="4 4" stroke-width="1"/>').format(pad, by, w - pad, by)
     return ('<svg viewBox="0 0 {} {}" width="100%" preserveAspectRatio="none">'
@@ -227,7 +244,7 @@ def render(d):
 
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kalshi Paper Trader</title>
+<title>Kalshi Paper Trader — {label}</title>
 <style>
 *{{box-sizing:border-box}}
 body{{background:#0d1117;color:#e6edf3;margin:0;padding:14px;
@@ -295,12 +312,12 @@ td.mkt{{color:#c9d1d9;max-width:46vw;overflow:hidden;text-overflow:ellipsis}}
 <th class="r">P&amp;L</th><th class="r hide-sm">Equity</th></tr>
 {rows_html}</table></div></div>
 </body></html>""".format(
-        start=fmt(s["start"]), now=datetime.now(timezone.utc), equity=fmt(s["equity"]),
+        label=s.get("label","Main"), start=fmt(s["start"]), now=datetime.now(timezone.utc), equity=fmt(s["equity"]),
         col=col, sign=sign, ret=s["return_pct"] * 100, cash=fmt(s["cash"]),
         sigrate=s["signal_rate"] * 100, sigw=s["signal_wins"], sign_n=s["signal_n"],
         trades=s["trades"], w=s["wins"], l=s["losses"], dd=s["max_dd"] * 100,
         openexp=fmt(s["open_exposure"]), openn=s["open"],
-        curve=svg_curve(d["curve"]), tiers=tiers, maxstake=fmt(MAX_STAKE_CENTS),
+        curve=svg_curve(d["curve"], start=s["start"]), tiers=tiers, maxstake=fmt(MAX_STAKE_CENTS),
         evcap=EVENT_CAP_PCT * 100, open_html=open_html, rows_html=rows_html)
 
 
@@ -308,12 +325,26 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--html")
+    ap.add_argument("--account", help="account id from accounts.json; omit for all")
     a = ap.parse_args()
-    if a.html:
-        out = a.html if os.path.isabs(a.html) else os.path.join(ROOT, a.html)
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        with open(out, "w", encoding="utf-8") as f:
-            f.write(render(build()))
-        print("wrote " + out)
-    else:
-        report()
+
+    accounts = load_accounts()
+    if a.account:
+        accounts = [x for x in accounts if x["id"] == a.account] or accounts[:1]
+
+    for acct in accounts:
+        bank = acct.get("paper_bankroll_cents", STARTING_CENTS)
+        label = acct.get("label", acct.get("id", "Main"))
+        if a.html:
+            # one dashboard per account: docs/index.html, docs/<id>.html
+            base = a.html if os.path.isabs(a.html) else os.path.join(ROOT, a.html)
+            if len(accounts) > 1:
+                d_, f_ = os.path.split(base)
+                base = os.path.join(d_, acct["id"] + ".html")
+            os.makedirs(os.path.dirname(base), exist_ok=True)
+            with open(base, "w", encoding="utf-8") as f:
+                f.write(render(build(bank, label)))
+            print("wrote " + base)
+        else:
+            report(bank, label)
+            print()
