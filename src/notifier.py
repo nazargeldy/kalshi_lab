@@ -1,23 +1,17 @@
 """
-Multi-channel notifier: Telegram and/or Discord.
+Telegram notifier.
 
-Credentials live OUTSIDE any git repo, in ~/.kalshi_keys/:
-    telegram.txt          line 1 = bot token, line 2 = chat id
-                          (or JSON: {"token": "...", "chat_id": "..."})
-    discord_webhook.txt   the webhook URL
+Credentials live OUTSIDE any git repo, in ~/.kalshi_keys/telegram.txt:
+    line 1 = bot token   (from @BotFather - a BOT token, never a user account)
+    line 2 = chat id
+Or JSON: {"token": "...", "chat_id": "..."}
+Env vars TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID override the file.
 
-Env vars override files:
-    TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
-    DISCORD_WEBHOOK_URL
+A bot token is least-privilege: it can post messages to chats that have started
+the bot, and nothing else. It cannot read your account or act as you.
 
-Notes on choice of credential:
-  - Telegram uses a BOT token (from @BotFather), never a user account.
-  - Discord uses a WEBHOOK, never a user token. Automating a Discord user
-    account is against their ToS and carries full account access.
-Both are least-privilege: they can post messages and nothing else.
-
-Any channel that is not configured is silently skipped. If none are configured,
-notify() prints to stdout so the monitor keeps running regardless.
+If Telegram is not configured, notify() prints to stdout so the monitor keeps
+running regardless.
 """
 import json
 import os
@@ -67,21 +61,6 @@ def telegram_creds():
     return _cache["tg"]
 
 
-def discord_webhook():
-    if "dc" in _cache:
-        return _cache["dc"]
-    url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
-    if not url:
-        raw = _read_key_file("discord_webhook.txt")
-        for line in (raw or "").splitlines():
-            line = line.strip()
-            if line.startswith("https://"):
-                url = line
-                break
-    _cache["dc"] = url
-    return url
-
-
 def _send_telegram(title, body, url=None):
     tok, chat = telegram_creds()
     if not (tok and chat):
@@ -103,23 +82,6 @@ def _send_telegram(title, body, url=None):
         return False
 
 
-def _send_discord(title, body, url=None, color=0x2ECC71):
-    hook = discord_webhook()
-    if not hook:
-        return None
-    embed = {"title": title[:250], "description": body[:3800], "color": color}
-    if url:
-        embed["url"] = url
-    try:
-        r = requests.post(hook, json={"embeds": [embed]}, timeout=12)
-        if r.status_code not in (200, 204):
-            print("discord HTTP {}: {}".format(r.status_code, r.text[:140]))
-        return r.status_code in (200, 204)
-    except Exception as e:
-        print("discord error: " + str(e)[:120])
-        return False
-
-
 def _esc(t):
     return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -133,30 +95,31 @@ def _md_to_html(t):
     return "".join(out)
 
 
-def notify(title, body, url=None, color=0x2ECC71):
-    """Send to every configured channel. Returns True if any succeeded."""
-    results = [_send_telegram(title, body, url), _send_discord(title, body, url, color)]
-    sent = [r for r in results if r is not None]
-    if not sent:
-        print("[no notification channel configured]\n" + title + "\n" + body
+def notify(title, body, url=None, color=None):
+    """Send the alert to Telegram. Returns True on success.
+
+    `color` is accepted and ignored so callers don't need to care which
+    channel is configured. Never raises: a notification failure must not
+    take down the monitor.
+    """
+    r = _send_telegram(title, body, url)
+    if r is None:
+        print("[telegram not configured]\n" + title + "\n" + body
               + (("\n" + url) if url else ""))
         return False
-    return any(sent)
+    return bool(r)
 
 
 def status():
     tok, chat = telegram_creds()
-    return {
-        "telegram": bool(tok and chat),
-        "discord": bool(discord_webhook()),
-    }
+    return {"telegram": bool(tok and chat)}
 
 
 def test():
     st = status()
     print("channels configured:", st)
-    if not any(st.values()):
-        print("nothing to test - add credentials first")
+    if not st["telegram"]:
+        print("nothing to test - add ~/.kalshi_keys/telegram.txt first")
         return False
     ok = notify(
         "Kalshi monitor connected",
