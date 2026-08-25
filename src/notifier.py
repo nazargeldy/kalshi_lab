@@ -14,6 +14,7 @@ If Telegram is not configured, notify() prints to stdout so the monitor keeps
 running regardless.
 """
 import json
+import re
 import os
 
 import requests
@@ -86,13 +87,34 @@ def _esc(t):
     return (t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
 def _md_to_html(t):
-    """Convert the small subset of markdown we emit (**bold**) to Telegram HTML."""
+    """Convert the markdown subset we emit (**bold**, [text](url)) to Telegram HTML.
+
+    Links are extracted first and re-inserted after escaping, so the anchor
+    markup survives HTML-escaping of the surrounding text.
+    """
+    t = t or ""
+    links = []
+
+    def _stash(m):
+        links.append((m.group(1), m.group(2)))
+        return "\x00LINK{}\x00".format(len(links) - 1)
+
+    t = _MD_LINK.sub(_stash, t)
+
     out, bold = [], False
-    for chunk in (t or "").split("**"):
+    for chunk in t.split("**"):
         out.append(("<b>" + _esc(chunk) + "</b>") if bold else _esc(chunk))
         bold = not bold
-    return "".join(out)
+    html = "".join(out)
+
+    for i, (text, url) in enumerate(links):
+        html = html.replace("\x00LINK{}\x00".format(i),
+                            "<a href='" + url + "'>" + _esc(text) + "</a>")
+    return html
 
 
 def notify(title, body, url=None, color=None):

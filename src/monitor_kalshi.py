@@ -103,10 +103,25 @@ def is_direction(ticker, title=""):
     return any(h in tl for h in DIRECTION_TITLE)
 
 
+DASHBOARD_URL = os.getenv(
+    "PAPER_DASHBOARD_URL", "https://nazargeldy.github.io/kalshi-paper-trader/")
+
+
 def kalshi_url(series, event):
     if series and event:
         return "https://kalshi.com/markets/" + series.lower() + "/" + event.lower()
     return "https://kalshi.com/markets"
+
+
+def _fmt_close(hours):
+    """Human-readable time-to-close for the alert body."""
+    if hours is None:
+        return "unknown"
+    if hours < 1:
+        return "in {:.0f} min".format(max(1, hours * 60))
+    if hours < 24:
+        return "in {:.0f}h".format(hours)
+    return "in {:.0f}d".format(hours / 24.0)
 
 
 def notify(title, body, link=None):
@@ -327,15 +342,26 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
             label = (meta.get("yes_sub") or "Yes") if side_dir == "YES" else (meta.get("no_sub") or "No")
             link = kalshi_url(series_of(tk), ev)
-            rl = "".join("  • " + r + "\n" for r in reasons)
-            msg = ("\U0001F6A8 <b>Unusual Activity — Kalshi</b>\n\n"
-                   "❓ <b>" + meta["title"][:150] + "</b>\n\n"
-                   "\U0001F4CC <b>Side:</b> " + side_dir + " (" + str(label) + ")  @ "
-                   + str(entry_c) + "¢\n"
-                   "\U0001F4E6 Trade size: {:,.0f} contracts\n".format(size) +
-                   "⚡ Score: {:.0f}/100  ({} signals)\n\n".format(score, hits) +
-                   "\U0001F4C8 <b>Why flagged:</b>\n" + rl + "\n"
-                   "\U0001F517 <a href='" + link + "'>Trade on Kalshi</a>")
+            rl = "".join("   • " + r + "\n" for r in reasons)
+
+            side_emoji = "\U0001F7E2" if side_dir == "YES" else "\U0001F534"
+            if score >= 95:
+                heat = "\U0001F525\U0001F525\U0001F525"
+            elif score >= 85:
+                heat = "\U0001F525\U0001F525"
+            else:
+                heat = "\U0001F525"
+
+            title_txt = "\U0001F6A8 " + meta["title"][:200]
+            body_txt = (
+                "{} **Side:** {} ({})  @  **{}¢**\n"
+                "\U0001F4E6 **Size:** {:,.0f} contracts\n"
+                "{} **Score:** {:.0f}/100  ({} signals)\n"
+                "⏱️ **Closes:** {}\n\n"
+                "\U0001F4CA **Why flagged:**\n{}\n"
+                "\U0001F4C8 [Paper-trade dashboard]({})"
+            ).format(side_emoji, side_dir, label, entry_c, size, heat, score, hits,
+                     _fmt_close(htc), rl, DASHBOARD_URL)
 
             print("ALERT {:.0f} {} {}@{}c  {}".format(score, tk, side_dir, entry_c,
                                                       meta["title"][:45]))
