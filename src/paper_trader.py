@@ -244,7 +244,7 @@ def render(d):
 
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kalshi Paper Trader — {label}</title>
+<title>Kalshi Paper Trader</title>
 <style>
 *{{box-sizing:border-box}}
 body{{background:#0d1117;color:#e6edf3;margin:0;padding:14px;
