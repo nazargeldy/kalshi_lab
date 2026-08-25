@@ -1,8 +1,8 @@
 """
 Kalshi-only unusual-activity monitor.
 
-100% Kalshi. No Polymarket. No Telegram. Alerts are written to SQLite
-and surfaced on the dashboard only.
+100% Kalshi. No Polymarket. Alerts persist to SQLite, appear on the
+dashboard, and are pushed to any configured channel (Telegram / Discord).
 
 Signals (all from Kalshi's public trade feed):
   A) Size shock      - trade size vs rolling market baseline (robust z-score)
@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from kalshi_client import KalshiClient
-from notifier import notify as discord_notify
+from notifier import notify as send_notification
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
@@ -110,10 +110,11 @@ def kalshi_url(series, event):
 
 
 def notify(title, body, link=None):
-    """Alert sink: stdout + Discord webhook (no account tokens involved)."""
+    """Alert sink: stdout + every configured channel (Telegram / Discord).
+    Uses a Telegram BOT token and a Discord WEBHOOK - never user accounts."""
     print(title + " | " + body.replace(chr(10), " ")[:160])
     try:
-        discord_notify(title, body, url=link)
+        send_notification(title, body, url=link)
     except Exception as e:
         print("notify error: " + str(e)[:100])
     return True
@@ -214,7 +215,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
     cap_day = datetime.now(timezone.utc).date()
 
     print("Kalshi monitor starting (threshold={}, dry_run={})".format(threshold, dry_run))
-    print("Kalshi monitor online. Alerts -> SQLite + dashboard (no messaging).")
+    print("Kalshi monitor online. Alerts -> SQLite + dashboard + " + str(__import__("notifier").status()))
 
     poll = 0
     while True:
