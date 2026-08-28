@@ -178,16 +178,23 @@ class Baselines:
             elif rate >= 5:
                 s += 14; hits += 1; reasons.append("{:.0f}x trade-frequency spike".format(rate))
 
+        # Order-flow imbalance: DISABLED as a scoring signal.
+        # Live result over 62 settled alerts: alerts containing it went 35.3%
+        # win / -49.7% ROI, CI[-81.5%,-14.4%] - the only statistically
+        # significant finding in the sample, and it is negative. Excluding it
+        # lifted the rest to 57.8% / +26.7%.
+        # Mechanism: heavy one-sided TAKER flow means someone is crossing the
+        # spread for immediacy. That is liquidity-demanding, not informed - you
+        # enter right after the price was pushed against you. Unlike Polymarket
+        # (where wallets are visible and identity carries information), Kalshi
+        # flow is anonymous, so aggression is all we see.
+        # Kept as an informational tag only; contributes no score and no hit.
         fl = list(self.flow[tk])
         if len(fl) >= 12:
             imb = abs(sum(fl)) / len(fl)
             side = "YES" if sum(fl) > 0 else "NO"
             if imb >= 0.80:
-                s += 22; hits += 1
-                reasons.append("Extreme one-sided flow ({:.0%} {} takers)".format(imb, side))
-            elif imb >= 0.60:
-                s += 13; hits += 1
-                reasons.append("Heavy one-sided flow ({:.0%} {} takers)".format(imb, side))
+                reasons.append("(fyi) one-sided flow {:.0%} {} takers".format(imb, side))
 
         pr = list(self.prices[tk])
         if len(pr) >= 10:
