@@ -44,13 +44,25 @@ def load_accounts():
 
 STARTING_CENTS = 1000_00              # $1,000 default
 EVENT_CAP_PCT = 0.15                  # max 15% of account on any one event
-MAX_STAKE_CENTS = 50_00
+MAX_STAKE_CENTS = 40_00
 MIN_STAKE_CENTS = 20_00
 APPLY_FEES = True
 
-# Confidence -> % of account. Deliberately modest so ~20-30 concurrent
-# positions fit and the account can take most signals.
-SIZING = [(95, 0.050), (90, 0.040), (85, 0.030), (0, 0.020)]
+# FLAT sizing - the same fraction of the account on every alert, whatever the
+# score says.
+#
+# This used to scale with score ("if confidence is highest, invest more"). That
+# was backwards. Measured over the 292 settled alerts, the score is
+# ANTI-predictive:
+#     Spearman rho(score, per-trade ROI) = -0.100   (permutation p = 0.08)
+#     score  <80   n=132   ROI  -0.9%   <- best band
+#     score >=85   n= 94   ROI -16.5%   <- worst band
+# So the old ladder put 5% of the account on the bets most likely to lose and
+# 2% on the ones most likely to win. Flat sizing removes that leak. It is the
+# honest default until a scoring model exists that demonstrably ranks outcomes;
+# restoring a ladder requires rho > 0 with a CI that excludes zero.
+FLAT_STAKE_PCT = 0.025
+SIZING = [(0, FLAT_STAKE_PCT)]
 
 
 def fee_cents(contracts, price_cents):

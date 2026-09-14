@@ -36,18 +36,39 @@ from notifier import notify as send_notification
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
 
+# The account did not blow up on one bad bet - it was ground down. -7.6% per
+# trade over 292 trades in three weeks compounds to -63%. Cutting turnover is
+# the largest lever available, because the edge is not reliably positive and
+# every extra trade pays the fee again.
+#
+# Turnover is cut with DAILY_CAP, NOT by raising ALERT_THRESHOLD. Raising the
+# threshold would be actively harmful: the score is anti-predictive, so the
+# 75-79 band is the BEST performing one (n=132, -0.9% ROI) and 95-99 is the
+# worst (n=26, -24.8%). Lifting the bar to 80 would throw away the best band
+# and keep the worst. Threshold stays at 75 until the score is fixed or
+# replaced.
 ALERT_THRESHOLD = 75
-DAILY_CAP = 20
+DAILY_CAP = 8
 MARKET_COOLDOWN = 3600
 EVENT_COOLDOWN = 4 * 3600
 SIDE_FLIP_WINDOW = 24 * 3600
 POLL_SEC = 30
 BASELINE_MIN_TRADES = 8
 
-# Categories we never trade. Sports is excluded because match markets are sharp,
-# fast, and dominated by specialists. Uses Kalshi's own event category, which is
-# far more reliable than matching ticker substrings.
-BLOCKED_CATEGORIES = {"Sports"}
+# Categories we never trade. Uses Kalshi's own event category, which is far more
+# reliable than matching ticker substrings.
+#   Sports        - match markets are sharp, fast, dominated by specialists.
+#   Entertainment - n=11 live, 36% win / -47% ROI, CI upper -5.4%. Awards, chart
+#                   positions and reality-TV eliminations resolve on private
+#                   information (voting panels, studio decisions) that no amount
+#                   of order-flow watching can reach.
+#   Mentions      - n=5 live, -52% ROI, CI upper -3.3%. "Will X say word Y" is a
+#                   coin flip on speech we cannot forecast; spreads are wide.
+# NOTE: Politics/Elections are deliberately NOT blocked. The old Polymarket rule
+# banned them, but that was a non-US, crypto-native trader base. On Kalshi the
+# traders are US persons on a CFTC venue and the live sample is tiny but
+# positive (Politics n=2, Elections n=3). There is no evidence to ban them here.
+BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions"}
 
 # Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
 # 98%+ hit rate just to break even. Buying at 3c is a lottery ticket.
@@ -55,6 +76,15 @@ MIN_ENTRY_CENTS = 12
 MAX_ENTRY_CENTS = 88
 
 JUNK_PREFIXES = ("KXMVE",)
+
+# Range/bucket ladders: "Bitcoin price RANGE on Aug 23" splits one event into a
+# strip of narrow buckets, so you need the settle to land inside a band rather
+# than merely above or below a strike. Lower base rate, wider spreads, and the
+# fee is charged on each leg. KXBTC (the range ladder) went 23.1% win / -52.6%
+# ROI over n=26 with a CI upper bound of -14.3% - the strongest negative in the
+# sample - while its threshold-style sibling KXBTCD was roughly break-even.
+RANGE_SERIES = ("KXBTC",)
+RANGE_TITLE = ("price range", "range on", "between")
 # Ultra-short crypto/index direction markets ("price up in next 15 mins?").
 # These are the coin-flip category that produced 39% win rate / -16% ROI in the
 # previous project. Structurally unpredictable; unusual flow carries no edge.
@@ -93,6 +123,13 @@ def is_junk(t):
 def is_sports(t):
     s = series_of(t).upper()
     return any(h in s for h in SPORTS_HINTS)
+
+
+def is_range_ladder(ticker, title=""):
+    if series_of(ticker).upper() in RANGE_SERIES:
+        return True
+    tl = (title or "").lower()
+    return any(h in tl for h in RANGE_TITLE)
 
 
 def is_direction(ticker, title=""):
@@ -154,6 +191,8 @@ class Baselines:
         s = 0
         reasons = []
         hits = 0
+        _fl0 = list(self.flow[tk])
+        side_dir = "YES" if sum(_fl0) > 0 else "NO"
 
         sizes = list(self.sizes[tk])
         if len(sizes) >= BASELINE_MIN_TRADES:
@@ -219,6 +258,19 @@ class Baselines:
             reasons.append("Longshot penalty ({:.0f}c)".format(cents))
         elif cents <= 20 or cents >= 80:
             s -= 4
+
+        # YES-side penalty. Every signal we have fires on unusual SIZE or SPEED,
+        # and on a retail venue that flow skews toward buying YES - people stake
+        # on things happening, not on them failing. So "big trade just went
+        # through" is disproportionately a crowd-following buy signal, and we
+        # were taking the same side as the crowd. Live split over 292 settled:
+        #   YES n=189  41.8% win  -15.5% ROI
+        #   NO  n=103  52.4% win   +7.0% ROI
+        # A penalty rather than an outright ban: the NO CI still straddles zero,
+        # so this leans against YES without betting the system on n=103.
+        if side_dir == "YES":
+            s -= 8
+            reasons.append("YES-side penalty (crowd-following bias)")
 
         raw = min(s, 100)
         return (min(raw, 45) if hits < 2 else raw), reasons, hits
@@ -314,6 +366,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                     pass
 
             if is_direction(tk, meta.get("title")):
+                continue
+            if is_range_ladder(tk, meta.get("title")):
                 continue
             if meta.get("category") in BLOCKED_CATEGORIES:
                 continue
