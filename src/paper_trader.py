@@ -14,6 +14,17 @@ Design decisions carried over from the previous project's failures:
     account can't flatter the underlying strategy (or vice versa).
   - Fees modelled with Kalshi's real formula.
 
+Policy v2 (rules.POLICY_FROM, 2026-09-17):
+  - The account is FROZEN: no new positions until the filtered signal has
+    rules.VALIDATION_MIN_N settled alerts and beats the market-implied win
+    rate by the fee hurdle. Every alert is still logged, resolved and counted
+    in the "shadow" set, so the test runs without risking the (paper) account.
+    Existing open positions settle normally.
+  - Alerts after the cutoff must pass rules.reject_reason (no crypto price
+    markets, 25-88c entry, settles within 14 days, one position per event with
+    no side flips or 24h re-entry). Alerts before the cutoff replay under the
+    old rules so the historical curve is not rewritten.
+
 Run:
   python src/paper_trader.py --report
   python src/paper_trader.py --html docs/index.html
@@ -25,6 +36,9 @@ import sqlite3
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rules
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
@@ -85,9 +99,12 @@ def fmt(c):
 
 def build(starting_cents=None, label=None):
     con = sqlite3.connect(DB, timeout=30)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(alerts)")}
+    close_col = "close_ts" if "close_ts" in cols else "NULL"
     rows = con.execute(
         "SELECT id, ts, ticker, event_ticker, title, side, entry_cents, score, "
-        "reasons, link, result FROM alerts ORDER BY ts ASC").fetchall()
+        "reasons, link, result, settled_ts, {} FROM alerts ORDER BY ts ASC".format(close_col)
+    ).fetchall()
 
     start = starting_cents or STARTING_CENTS
     cash = start
@@ -99,18 +116,52 @@ def build(starting_cents=None, label=None):
     event_exposure = defaultdict(int)
     skipped_cap = 0
 
+    # Policy v2 bookkeeping
+    event_history = defaultdict(list)     # event -> [(ts, side, result)] for rules
+    rejects = defaultdict(int)            # reason -> count (post-cutoff only)
+    eligible = []                         # post-cutoff alerts that passed the rules
+    frozen = 0                            # eligible alerts not taken because gate closed
+    gate_open = False
+    gate_opened_ts = None
+
     def open_cost():
         return sum(p["stake"] for p in open_pos)
 
-    for (aid, ts, ticker, ev, title, side, entry_c, score, reasons, link, result) in rows:
+    def settled_eligible_before(ts):
+        # Only alerts that had SETTLED by this moment count toward the gate,
+        # otherwise the replay would know outcomes before they happened.
+        return [(e["entry"], e["result"] == "WIN") for e in eligible
+                if e["result"] in ("WIN", "LOSS") and e["settled_ts"] and e["settled_ts"] <= ts]
+
+    for (aid, ts, ticker, ev, title, side, entry_c, score, reasons, link, result,
+         settled_ts, close_ts) in rows:
         if entry_c is None or not (1 <= entry_c <= 99):
             continue
+        ev_key = ev or ticker
+        v2 = rules.is_policy_v2(ts)
+
+        if v2:
+            why = rules.reject_reason(ticker, title, side, entry_c, close_ts, ts,
+                                      event_history[ev_key])
+            event_history[ev_key].append((ts, side, result))
+            if why:
+                rejects[why] += 1
+                continue
+            eligible.append({"id": aid, "ts": ts, "entry": entry_c, "result": result,
+                             "settled_ts": settled_ts, "side": side, "title": title})
+            if not gate_open:
+                gate_open = rules.validation(settled_eligible_before(ts))["open"]
+                if gate_open:
+                    gate_opened_ts = ts
+            if not gate_open:
+                frozen += 1
+                continue
+
         equity = cash + open_cost()
         stake = round(stake_pct(score or 0) * equity)
         stake = max(MIN_STAKE_CENTS, min(stake, MAX_STAKE_CENTS))
 
         # per-event concentration cap
-        ev_key = ev or ticker
         if event_exposure[ev_key] + stake > EVENT_CAP_PCT * equity:
             skipped_cap += 1
             continue
@@ -156,6 +207,19 @@ def build(starting_cents=None, label=None):
     sig = [r for r in rows if r[10] in ("WIN", "LOSS")]
     sig_w = sum(1 for r in sig if r[10] == "WIN")
 
+    # Validation as of now (all settled eligible alerts, no time cut).
+    val = rules.validation((e["entry"], e["result"] == "WIN")
+                           for e in eligible if e["result"] in ("WIN", "LOSS"))
+    val.update({
+        "eligible": len(eligible),
+        "pending": sum(1 for e in eligible if e["result"] not in ("WIN", "LOSS")),
+        "rejects": dict(rejects),
+        "frozen": frozen,
+        "gate_open": gate_open,
+        "gate_opened_ts": gate_opened_ts,
+        "policy_from": rules.POLICY_FROM,
+    })
+
     return {
         "stats": {
             "equity": equity, "cash": cash, "start": start,
@@ -169,7 +233,7 @@ def build(starting_cents=None, label=None):
             "peak": peak, "max_dd": max_dd, "skipped_cap": skipped_cap,
             "total_alerts": len(rows),
         },
-        "closed": closed, "open": open_pos, "curve": curve,
+        "closed": closed, "open": open_pos, "curve": curve, "validation": val,
     }
 
 
@@ -190,6 +254,16 @@ def report(starting_cents=None, label=None):
     print("  Max drawdown    : -{:.1f}%".format(s["max_dd"] * 100))
     print("  Alerts total    : {} (skipped by event cap: {})".format(
         s["total_alerts"], s["skipped_cap"]))
+    v = d["validation"]
+    print("  Policy v2       : since {}  gate {}".format(
+        v["policy_from"][:10], "OPEN since " + v["gate_opened_ts"][:16] if v["gate_open"] else "CLOSED (frozen)"))
+    print("  Shadow signal   : {}/{} settled  actual {:.1%} [{:.1%}, {:.1%}]  implied {:.1%}  gap {:+.1f}pt  hurdle +{:.0f}pt".format(
+        v["n"], v["min_n"], v["actual"], v["lo"], v["hi"], v["implied"],
+        v["gap"] * 100, v["hurdle"] * 100))
+    print("  Eligible/pending: {} / {}   frozen (not taken): {}".format(
+        v["eligible"], v["pending"], v["frozen"]))
+    for k, c in sorted(v["rejects"].items(), key=lambda kv: -kv[1]):
+        print("    rejected {:3d}  {}".format(c, k))
 
 
 def svg_curve(curve, w=920, h=220, start=None):
@@ -252,7 +326,53 @@ def render(d):
     if not open_html:
         open_html = '<tr><td colspan="6" class="muted">No open positions.</td></tr>'
 
-    tiers = " · ".join("{}+→{:.0f}%".format(th, p * 100) for th, p in SIZING if th)
+    tiers = " · ".join("{}+→{:.0f}%".format(th, p * 100) for th, p in SIZING if th) \
+        or "flat {:.1f}% of account".format(FLAT_STAKE_PCT * 100)
+
+    v = d["validation"]
+    if v["gate_open"]:
+        gate_txt, gate_col = "OPEN", "#2ecc71"
+        gate_sub = "since " + v["gate_opened_ts"][:16].replace("T", " ")
+    else:
+        gate_txt, gate_col = "FROZEN", "#e0a458"
+        gate_sub = "validating"
+    need = "&#10003;" if v["n"] >= v["min_n"] else "{} more settles needed".format(v["min_n"] - v["n"])
+    beat = "&#10003;" if v["gap"] >= v["hurdle"] else "short by {:.1f}pt".format((v["hurdle"] - v["gap"]) * 100)
+    ci_note = ("CI includes the implied rate: any gap is still consistent with noise."
+               if v["lo"] <= v["implied"] <= v["hi"] else
+               "CI excludes the implied rate.")
+    rej_html = "".join(
+        "<tr><td>{}</td><td class=\"r\">{}</td></tr>".format(esc(k), c)
+        for k, c in sorted(v["rejects"].items(), key=lambda kv: -kv[1])) \
+        or "<tr><td colspan=\"2\" class=\"muted\">No alerts rejected yet.</td></tr>"
+    validation_html = """
+<div class="panel"><h2>Signal Validation &mdash; policy v2 since {pf}</h2>
+<div class="legend" style="margin:0 0 10px">The account takes <b>no new positions</b> until the filtered
+ signal, measured forward from {pf}, has <b>{minn}</b> settled alerts and beats the
+ market-implied win rate (average entry price) by at least <b>{hurdle:.0f} points</b>, roughly what
+ taker fees cost. Every alert is still logged and settled; only the staking is paused.</div>
+<div class="cards" style="margin-bottom:10px">
+ <div class="card"><div class="label">Settled / needed</div><div class="value">{n}<span> / {minn}</span></div>
+   <div class="legend" style="margin:2px 0 0">{need}</div></div>
+ <div class="card"><div class="label">Actual win rate</div><div class="value">{act:.1f}%</div>
+   <div class="legend" style="margin:2px 0 0">95% CI {lo:.1f}&ndash;{hi:.1f}%</div></div>
+ <div class="card"><div class="label">Market implied</div><div class="value">{imp:.1f}%</div>
+   <div class="legend" style="margin:2px 0 0">avg entry price</div></div>
+ <div class="card"><div class="label">Edge vs hurdle</div>
+   <div class="value" style="color:{gapcol}">{gap:+.1f}<span> / +{hurdle:.0f}pt</span></div>
+   <div class="legend" style="margin:2px 0 0">{beat}</div></div>
+ <div class="card"><div class="label">Eligible alerts</div><div class="value">{elig}<span> ({pend} pending)</span></div>
+   <div class="legend" style="margin:2px 0 0">{frozen} not staked (frozen)</div></div>
+</div>
+<div class="legend">{ci_note}</div>
+<div class="tablewrap" style="margin-top:10px"><table>
+<tr><th>Rejected by rule</th><th class="r">Alerts</th></tr>{rej}</table></div></div>
+""".format(pf=v["policy_from"][:10], minn=v["min_n"], hurdle=v["hurdle"] * 100,
+           n=v["n"], need=need, act=v["actual"] * 100, lo=v["lo"] * 100, hi=v["hi"] * 100,
+           imp=v["implied"] * 100, gap=v["gap"] * 100,
+           gapcol="#2ecc71" if v["gap"] >= v["hurdle"] else "#e74c3c", beat=beat,
+           elig=v["eligible"], pend=v["pending"], frozen=v["frozen"], ci_note=ci_note,
+           rej=rej_html)
 
     return """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -285,7 +405,7 @@ td.mkt{{color:#c9d1d9;max-width:46vw;overflow:hidden;text-overflow:ellipsis}}
 </style></head><body>
 <h1>\U0001F4C8 Kalshi Paper Trader</h1>
 <div class="sub">Simulated account · funded {start} · <b>Kalshi only</b> ·
- sized by confidence · settles on real Kalshi outcomes ·
+ flat sizing · settles on real Kalshi outcomes ·
  <span class="muted">updated {now:%Y-%m-%d %H:%M UTC}</span></div>
 
 <div class="warn"><b>Paper money.</b> No real funds are at risk. This is a live
@@ -305,13 +425,18 @@ td.mkt{{color:#c9d1d9;max-width:46vw;overflow:hidden;text-overflow:ellipsis}}
    <div class="value" style="color:#e0a458">-{dd:.1f}%</div></div>
  <div class="card"><div class="label">In Open Bets</div>
    <div class="value">{openexp}<span> ({openn})</span></div></div>
+ <div class="card"><div class="label">New Positions</div>
+   <div class="value" style="color:{gatecol}">{gate}<span> {gatesub}</span></div></div>
 </div>
+{validation_html}
 
 <div class="panel"><h2>Equity Curve &mdash; {start} → {equity}</h2>
 {curve}
 <div class="legend">Sizing: {tiers} &nbsp;|&nbsp; per-bet cap {maxstake} &nbsp;|&nbsp;
- per-event cap {evcap:.0f}% of account &nbsp;|&nbsp; Kalshi fees on &nbsp;|&nbsp;
- filters: no sports, no auto-generated, no 15-min direction markets</div></div>
+ per-event cap {evcap:.0f}% of account &nbsp;|&nbsp; Kalshi fees on<br>
+ filters (policy v2): no crypto price markets &nbsp;|&nbsp; entry {minc}&ndash;{maxc}¢ &nbsp;|&nbsp;
+ settles within {maxd} days &nbsp;|&nbsp; one position per event, no side flips, no re-entry within {reh}h
+ &nbsp;|&nbsp; plus: no sports, no auto-generated, no 15-min direction, no range ladders</div></div>
 
 <div class="panel"><h2>Open Positions ({openn})</h2><div class="tablewrap"><table>
 <tr><th class="hide-sm">Time</th><th>Market</th><th>Side</th>
@@ -330,7 +455,10 @@ td.mkt{{color:#c9d1d9;max-width:46vw;overflow:hidden;text-overflow:ellipsis}}
         trades=s["trades"], w=s["wins"], l=s["losses"], dd=s["max_dd"] * 100,
         openexp=fmt(s["open_exposure"]), openn=s["open"],
         curve=svg_curve(d["curve"], start=s["start"]), tiers=tiers, maxstake=fmt(MAX_STAKE_CENTS),
-        evcap=EVENT_CAP_PCT * 100, open_html=open_html, rows_html=rows_html)
+        evcap=EVENT_CAP_PCT * 100, open_html=open_html, rows_html=rows_html,
+        gate=gate_txt, gatecol=gate_col, gatesub=gate_sub, validation_html=validation_html,
+        minc=rules.MIN_ENTRY_CENTS, maxc=rules.MAX_ENTRY_CENTS, maxd=rules.MAX_DAYS_TO_CLOSE,
+        reh=rules.EVENT_REENTRY_HOURS)
 
 
 if __name__ == "__main__":

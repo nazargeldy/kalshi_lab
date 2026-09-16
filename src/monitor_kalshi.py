@@ -18,6 +18,9 @@ Guardrails carried over from the previous project's expensive mistakes:
   - longshot penalty (cheap tails lose after fees)
   - daily cap + per-market cooldown
   - >=2 independent anomaly signals required before any alert
+  - rules.py (2026-09-16): no crypto price markets, entry 25-88c, settles
+    within 14 days, one position per event with no side flips or 24h re-entry.
+    Checked against the DB so a restart cannot forget an open position.
 """
 import argparse
 import os
@@ -32,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from kalshi_client import KalshiClient
 from notifier import notify as send_notification
+import rules
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
@@ -72,8 +76,10 @@ BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions"}
 
 # Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
 # 98%+ hit rate just to break even. Buying at 3c is a lottery ticket.
-MIN_ENTRY_CENTS = 12
-MAX_ENTRY_CENTS = 88
+# Was 12-88. Live result for entries under 20c: 1 win in 23 (4.3% vs 16%
+# implied), -$369. Raised to 25 - see rules.py.
+MIN_ENTRY_CENTS = rules.MIN_ENTRY_CENTS
+MAX_ENTRY_CENTS = rules.MAX_ENTRY_CENTS
 
 JUNK_PREFIXES = ("KXMVE",)
 
@@ -98,9 +104,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, ticker TEXT, event_ticker TEXT,
   title TEXT, side TEXT, entry_cents INTEGER, score REAL, reasons TEXT,
-  link TEXT, contracts REAL, result TEXT, settled_ts TEXT
+  link TEXT, contracts REAL, result TEXT, settled_ts TEXT, close_ts TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_ticker ON alerts(ticker);
+CREATE INDEX IF NOT EXISTS idx_alerts_event ON alerts(event_ticker);
 """
 
 
@@ -109,7 +116,21 @@ def db():
     c = sqlite3.connect(DB, timeout=30)
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
+    # close_ts was added 2026-09-16 so the paper trader can enforce the
+    # max-horizon rule; older rows simply have NULL.
+    cols = {r[1] for r in c.execute("PRAGMA table_info(alerts)")}
+    if "close_ts" not in cols:
+        c.execute("ALTER TABLE alerts ADD COLUMN close_ts TEXT")
+        c.commit()
     return c
+
+
+def prior_event_alerts(con, event):
+    """Every earlier alert on this event, from the DB rather than in-memory
+    state, so a service restart cannot forget a position we already hold."""
+    return con.execute(
+        "SELECT ts, side, result FROM alerts WHERE event_ticker=? ORDER BY ts",
+        (event,)).fetchall()
 
 
 def series_of(t):
@@ -369,6 +390,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
             if is_range_ladder(tk, meta.get("title")):
                 continue
+            if rules.is_crypto(tk, meta.get("title")):
+                continue
             if meta.get("category") in BLOCKED_CATEGORIES:
                 continue
 
@@ -397,8 +420,13 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
 
             entry_c = round(price * 100) if side_dir == "YES" else round((1 - price) * 100)
-            if not (MIN_ENTRY_CENTS <= entry_c <= MAX_ENTRY_CENTS):
-                print("  PRICE skip: {} would enter at {}c".format(meta["title"][:40], entry_c))
+            now_iso = datetime.now(timezone.utc).isoformat()
+            why = rules.reject_reason(tk, meta.get("title"), side_dir, entry_c,
+                                      meta.get("close"), now_iso,
+                                      prior_event_alerts(con, ev))
+            if why:
+                print("  RULE skip ({}): {} {}@{}c".format(why, meta["title"][:40],
+                                                          side_dir, entry_c))
                 market_cd[tk] = now
                 continue
             label = (meta.get("yes_sub") or "Yes") if side_dir == "YES" else (meta.get("no_sub") or "No")
@@ -431,9 +459,9 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 sent_today += 1
                 con.execute(
                     "INSERT INTO alerts (ts,ticker,event_ticker,title,side,entry_cents,"
-                    "score,reasons,link,contracts) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (datetime.now(timezone.utc).isoformat(), tk, ev, meta["title"],
-                     side_dir, entry_c, score, " | ".join(reasons), link, size))
+                    "score,reasons,link,contracts,close_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (now_iso, tk, ev, meta["title"], side_dir, entry_c, score,
+                     " | ".join(reasons), link, size, meta.get("close")))
                 con.commit()
                 event_cd[ev] = now
                 event_side[ev] = side_dir

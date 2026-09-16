@@ -53,6 +53,26 @@ negative edge multiplied by high turnover.
   Kalshi's trader base is US persons on a CFTC venue and the (tiny) sample was
   positive. There is no evidence for a ban here.
 
+### Policy v2 (2026-09-17): account frozen, filtered signal under validation
+
+A second look at the full 368-trade record (reconstructed from the dashboard
+history) put numbers on where the money went, and the paper trader now
+enforces the answers. All rules live in `src/rules.py` and are shared by the
+monitor and the paper trader.
+
+| finding | rule |
+|---|---|
+| Crypto price markets were 52% of trades, 41.7% win, −$535 | blocked (`KXBTC*`, `KXETH*`, ... and title match) |
+| Entries under 20¢ went 1 for 23 (4.3% win vs 16% implied), −$369 | entry must be 25–88¢ (was 12–88) |
+| 198 trades in 38 markets; 29 markets traded on both sides | one position per event, never the opposite side, no re-entry within 24h, checked against the DB so a restart cannot forget a position |
+| $169 of a $385 account locked in bets settling Dec 2026 / Jan 2027 | market must settle within 14 days; `close_ts` is now stored per alert |
+| Actual win rate 45.4% vs 47.7% market-implied: no edge to size | **no new positions** until 200 settled eligible alerts beat the implied rate by 4 points (the fee hurdle) |
+
+Alerts before the cutoff replay under the old rules so the historical curve is
+not rewritten. Everything after it is still logged and settled; the dashboard's
+"Signal Validation" panel shows the running actual-vs-implied test and the gate
+opens automatically when it passes.
+
 ### What would be different next
 
 Everything above asked *who is trading*. The untested direction is *what is the
@@ -64,6 +84,7 @@ weather markets vs. NWS forecast probabilities. Same validation bar applies.
 ```
 src/monitor_kalshi.py     live monitor: polls trades, scores, filters, alerts, writes SQLite
 src/paper_trader.py       $1,000 paper account replayed from the alert table; renders docs/index.html
+src/rules.py              policy v2 entry rules + validation gate, shared by monitor and paper trader
 src/notifier.py           Telegram delivery (bot token only, never a user account)
 src/setup_telegram.py     one-shot: detects chat id after the user presses Start
 src/resolve_alerts.py     settles alerts by exact ticker (Kalshi tickers are unique)
@@ -118,7 +139,8 @@ data/                     gitignored: kalshi_alerts.db (alerts + 609k-trade tape
 - **Telegram bot tokens only.** Never a user account. Discord webhooks only,
   never a user token.
 - **Sports** blocked (sharp, specialist-dominated). **15-minute / hourly
-  direction markets** blocked (structurally unpredictable).
+  direction markets** blocked (structurally unpredictable). **Crypto price
+  markets** blocked entirely as of policy v2 (see above).
 
 ## Running
 
