@@ -67,6 +67,7 @@ monitor and the paper trader.
 | 198 trades in 38 markets; 29 markets traded on both sides | one position per event, never the opposite side, no re-entry within 24h, checked against the DB so a restart cannot forget a position |
 | $169 of a $385 account locked in bets settling Dec 2026 / Jan 2027 | market must settle within 14 days; `close_ts` is now stored per alert |
 | Actual win rate 45.4% vs 47.7% market-implied: no edge to size | **no new positions** until 200 settled eligible alerts beat the implied rate by 4 points (the fee hurdle) |
+| Time-to-close added up to +18 to the score, so daily crypto/weather got a head start and a YES alert on anything closing >3 days out was impossible (ceiling 69 < 75) | time-to-close is context only; threshold 75 → 60 so every category faces the same bar |
 
 Alerts before the cutoff replay under the old rules so the historical curve is
 not rewritten. Everything after it is still logged and settled; the dashboard's
@@ -165,5 +166,7 @@ python src/event_study.py
   Polymarket-era codebase — stopped and disabled, do not start it).
 - SQLite is in WAL mode; run `PRAGMA wal_checkpoint(TRUNCATE)` before copying
   the DB off the box.
-- Daily alert cap is 8; threshold 75. The threshold is deliberately *not*
-  raised: the score is anti-predictive, so 75–79 is the best band.
+- Daily alert cap is 8; threshold 60 (was 75 while time-to-close still added
+  up to +18; it is now context only, so 60 is the same bar for every
+  category). The threshold is deliberately *not* raised: the score is
+  anti-predictive, so the lowest passing band is the best one.

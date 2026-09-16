@@ -51,7 +51,12 @@ DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
 # worst (n=26, -24.8%). Lifting the bar to 80 would throw away the best band
 # and keep the worst. Threshold stays at 75 until the score is fixed or
 # replaced.
-ALERT_THRESHOLD = 75
+# 2026-09-16: time-to-close no longer contributes points (see score()). Daily
+# markets used to get +15 for free, so 75 was really "60 from anomaly signals"
+# for crypto/weather and "75 from anomaly signals" for everything else - which
+# made a YES alert on any market closing >3 days out mathematically impossible
+# (ceiling 35+22+20-8 = 69). Threshold is now 60 for every category alike.
+ALERT_THRESHOLD = 60
 DAILY_CAP = 8
 MARKET_COOLDOWN = 3600
 EVENT_COOLDOWN = 4 * 3600
@@ -264,13 +269,18 @@ class Baselines:
             elif abs(delta) >= 8:
                 s += 12; hits += 1; reasons.append("Price moved {:+.0f}c".format(delta))
 
+        # Time-to-close is CONTEXT ONLY - it says nothing about whether the
+        # flow is informed. It used to add up to 18 points, which handed every
+        # daily crypto/weather market a head start and starved Economics,
+        # Politics, Companies, Science etc. of alerts (65% of live trades were
+        # BTC/ETH). Kept as a tag so the alert still shows the horizon.
         if hours_to_close is not None:
             if hours_to_close <= 2:
-                s += 18; reasons.append("Closes within 2 hours")
+                reasons.append("(fyi) closes within 2 hours")
             elif hours_to_close <= 24:
-                s += 15; reasons.append("Closes within 24 hours")
+                reasons.append("(fyi) closes within 24 hours")
             elif hours_to_close <= 72:
-                s += 10; reasons.append("Closes within 3 days")
+                reasons.append("(fyi) closes within 3 days")
 
         # Lesson from the last project: cheap longshots lose badly after fees.
         cents = price * 100

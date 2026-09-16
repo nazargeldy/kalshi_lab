@@ -30,9 +30,12 @@ POLICY_FROM = "2026-09-17T00:00:00+00:00"
 # backstop for any series we have not seen yet.
 CRYPTO_SERIES_PREFIXES = ("KXBTC", "KXETH", "KXSOL", "KXXRP", "KXDOGE", "KXLTC",
                           "KXBNB", "KXADA", "KXAVAX", "KXLINK", "KXCRYPTO")
+# Title backstop needs BOTH a coin name and a price word, so "Will a crypto
+# bill reach the Senate floor" or "Will the US create a Bitcoin reserve" are
+# NOT blocked - only price-of-coin markets are.
 CRYPTO_TITLE_HINTS = ("bitcoin", "ethereum", "solana", "dogecoin", "xrp", "litecoin",
-                      "btc", "eth price", "sol price", "crypto")
-CRYPTO_PRICE_HINTS = ("price", "above", "below", "reach", "hit", "close")
+                      "btc", "eth price", "sol price")
+CRYPTO_PRICE_HINTS = ("price", "above", "below", "reach $", "hit $", "$")
 
 MIN_ENTRY_CENTS = 25
 MAX_ENTRY_CENTS = 88
