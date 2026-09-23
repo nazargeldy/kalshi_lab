@@ -77,6 +77,14 @@ BASELINE_MIN_TRADES = 8
 # banned them, but that was a non-US, crypto-native trader base. On Kalshi the
 # traders are US persons on a CFTC venue and the live sample is tiny but
 # positive (Politics n=2, Elections n=3). There is no evidence to ban them here.
+#
+# 2026-09-23: Mentions carries earnings-call word-mention markets
+# (KXEARNINGSMENTION*, "What will X say on their earnings call?") alongside
+# the celebrity/award/political "what will X say" markets that drove the
+# -52% ROI finding above. Those two are different bets - one is about a
+# public company's disclosed talking points, the other is unscriptable
+# speech - so earnings-mention markets are exempted below (is_earnings_mention)
+# rather than lumped in with the rest of the category.
 BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions"}
 
 # Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
@@ -164,6 +172,21 @@ def is_direction(ticker, title=""):
         return True
     tl = (title or "").lower()
     return any(h in tl for h in DIRECTION_TITLE)
+
+
+def is_earnings_mention(ticker, title=""):
+    """Carve-out from BLOCKED_CATEGORIES["Mentions"]: markets on what a
+    company says/discloses on its own earnings call, not celebrity or award
+    speech. Two independent signals so a typo'd ticker (KXEARNIGNSMENTIONJPM
+    is a real one) still matches via its title.
+    """
+    tk = (ticker or "").upper()
+    if "EARNINGSMENTION" in tk or "MENTIONEARN" in tk:
+        return True
+    if "EARN" in tk and "MENTION" in tk:
+        return True
+    tl = (title or "").lower()
+    return "earning" in tl and ("call" in tl or "mention" in tl)
 
 
 DASHBOARD_URL = os.getenv(
@@ -403,7 +426,9 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             if rules.is_crypto(tk, meta.get("title")):
                 continue
             if meta.get("category") in BLOCKED_CATEGORIES:
-                continue
+                if not (meta.get("category") == "Mentions"
+                        and is_earnings_mention(tk, meta.get("title"))):
+                    continue
 
             score, reasons, hits = base.score(tk, size, price, htc)
             if score < threshold:
