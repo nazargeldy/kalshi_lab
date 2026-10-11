@@ -43,6 +43,11 @@ MAX_ENTRY_CENTS = 88
 # Never enter a market that settles more than this far out.
 MAX_DAYS_TO_CLOSE = 14
 
+# Earnings-call word markets get a longer window: Kalshi lists them weeks ahead
+# and only ~1 call was inside 14 days at the start of Q3 earnings season.
+# Callers must pass the call date (occurrence_datetime) as close_ts for these.
+EARNINGS_MAX_DAYS_TO_CLOSE = 30
+
 # One position per event: no second entry on an event we already hold, never
 # the opposite side of an event we have ever taken, and no re-entry within
 # this many hours of the last alert on that event.
@@ -89,6 +94,20 @@ def is_policy_v2(ts):
     return t is not None and t >= parse_ts(POLICY_FROM)
 
 
+def is_earnings_mention(ticker, title=""):
+    """Markets on what a company says on its own earnings call (not celebrity
+    or award speech). Two independent signals so a typo'd ticker
+    (KXEARNIGNSMENTIONJPM is a real one) still matches via its title.
+    """
+    tk = (ticker or "").upper()
+    if "EARNINGSMENTION" in tk or "MENTIONEARN" in tk:
+        return True
+    if "EARN" in tk and "MENTION" in tk:
+        return True
+    tl = (title or "").lower()
+    return "earning" in tl and ("call" in tl or "mention" in tl)
+
+
 def reject_reason(ticker, title, side, entry_c, close_ts, at_ts, prior_event_alerts):
     """Return None if the alert may be entered, else a short reason string.
 
@@ -102,8 +121,10 @@ def reject_reason(ticker, title, side, entry_c, close_ts, at_ts, prior_event_ale
     htc = hours_to_close(close_ts, at_ts)
     if htc is None:
         return "close time unknown"
-    if htc > MAX_DAYS_TO_CLOSE * 24:
-        return "settles >{}d out".format(MAX_DAYS_TO_CLOSE)
+    max_days = (EARNINGS_MAX_DAYS_TO_CLOSE if is_earnings_mention(ticker, title)
+                else MAX_DAYS_TO_CLOSE)
+    if htc > max_days * 24:
+        return "settles >{}d out".format(max_days)
     now = parse_ts(at_ts)
     for pts, pside, presult in prior_event_alerts:
         if presult not in ("WIN", "LOSS"):

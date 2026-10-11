@@ -57,7 +57,7 @@ DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
 # made a YES alert on any market closing >3 days out mathematically impossible
 # (ceiling 35+22+20-8 = 69). Threshold is now 60 for every category alike.
 ALERT_THRESHOLD = 60
-DAILY_CAP = 8
+DAILY_CAP = 10   # was 8; raised 2026-10-11 now that weather no longer eats the cap
 MARKET_COOLDOWN = 3600
 EVENT_COOLDOWN = 4 * 3600
 SIDE_FLIP_WINDOW = 24 * 3600
@@ -83,7 +83,7 @@ BASELINE_MIN_TRADES = 8
 # the celebrity/award/political "what will X say" markets that drove the
 # -52% ROI finding above. Those two are different bets - one is about a
 # public company's disclosed talking points, the other is unscriptable
-# speech - so earnings-mention markets are exempted below (is_earnings_mention)
+# speech - so earnings-mention markets are exempted below (rules.is_earnings_mention)
 # rather than lumped in with the rest of the category.
 #
 # 2026-10-11: Climate and Weather blocked. 148 settled weather alerts across two
@@ -94,6 +94,11 @@ BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions", "Climate and Weathe
 
 # Backstop for when the category lookup fails. Series prefixes seen in live alerts.
 WEATHER_PREFIXES = ("KXHIGH", "KXLOW", "KXTEMP", "KXRAIN", "KXSNOW", "KXWIND")
+
+# 2026-10-11: any series with TRUMP in its name is skipped (matched on the
+# series ticker, not the title, so politics markets that merely mention him
+# still alert). Approval-rating series went 1-5 and Trump markets are one
+# correlated bet on a single person.
 
 # Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
 # 98%+ hit rate just to break even. Buying at 3c is a lottery ticket.
@@ -186,19 +191,8 @@ def is_direction(ticker, title=""):
     return any(h in tl for h in DIRECTION_TITLE)
 
 
-def is_earnings_mention(ticker, title=""):
-    """Carve-out from BLOCKED_CATEGORIES["Mentions"]: markets on what a
-    company says/discloses on its own earnings call, not celebrity or award
-    speech. Two independent signals so a typo'd ticker (KXEARNIGNSMENTIONJPM
-    is a real one) still matches via its title.
-    """
-    tk = (ticker or "").upper()
-    if "EARNINGSMENTION" in tk or "MENTIONEARN" in tk:
-        return True
-    if "EARN" in tk and "MENTION" in tk:
-        return True
-    tl = (title or "").lower()
-    return "earning" in tl and ("call" in tl or "mention" in tl)
+def is_trump(t):
+    return "TRUMP" in series_of(t).upper()
 
 
 DASHBOARD_URL = os.getenv(
@@ -381,7 +375,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
         fresh = 0
         for t in reversed(new):
             tk = t.get("ticker")
-            if not tk or is_junk(tk) or is_sports(tk) or is_direction(tk) or is_weather(tk):
+            if (not tk or is_junk(tk) or is_sports(tk) or is_direction(tk)
+                    or is_weather(tk) or is_trump(tk)):
                 continue
             try:
                 size = float(t.get("count_fp") or 0)
@@ -427,7 +422,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             # a Mar 2027 close), which tripped the 14-day rule on every one. The
             # real date is occurrence_datetime.
             em = (meta.get("category") == "Mentions"
-                  and is_earnings_mention(tk, meta.get("title")))
+                  and rules.is_earnings_mention(tk, meta.get("title")))
             eff_close = (meta.get("occurrence") if em and meta.get("occurrence")
                          else meta.get("close"))
 
