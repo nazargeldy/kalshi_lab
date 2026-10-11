@@ -85,7 +85,15 @@ BASELINE_MIN_TRADES = 8
 # public company's disclosed talking points, the other is unscriptable
 # speech - so earnings-mention markets are exempted below (is_earnings_mention)
 # rather than lumped in with the rest of the category.
-BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions"}
+#
+# 2026-10-11: Climate and Weather blocked. 148 settled weather alerts across two
+# periods: -13.4% (n=77, since 9/27) and -14.0% (n=71, 8/23-9/26) net ROI per
+# trade, and weather was 75% of all alerts since the reset - it crowded out
+# everything else under the daily cap.
+BLOCKED_CATEGORIES = {"Sports", "Entertainment", "Mentions", "Climate and Weather"}
+
+# Backstop for when the category lookup fails. Series prefixes seen in live alerts.
+WEATHER_PREFIXES = ("KXHIGH", "KXLOW", "KXTEMP", "KXRAIN", "KXSNOW", "KXWIND")
 
 # Refuse terrible risk/reward. Buying at 98c risks 98c to make 2c -> needs a
 # 98%+ hit rate just to break even. Buying at 3c is a lottery ticket.
@@ -157,6 +165,10 @@ def is_junk(t):
 def is_sports(t):
     s = series_of(t).upper()
     return any(h in s for h in SPORTS_HINTS)
+
+
+def is_weather(t):
+    return series_of(t).upper().startswith(WEATHER_PREFIXES)
 
 
 def is_range_ladder(ticker, title=""):
@@ -369,7 +381,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
         fresh = 0
         for t in reversed(new):
             tk = t.get("ticker")
-            if not tk or is_junk(tk) or is_sports(tk) or is_direction(tk):
+            if not tk or is_junk(tk) or is_sports(tk) or is_direction(tk) or is_weather(tk):
                 continue
             try:
                 size = float(t.get("count_fp") or 0)
@@ -400,6 +412,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                         "title": m.get("title") or tk,
                         "event": ev_tk,
                         "close": m.get("close_time"),
+                        "occurrence": m.get("occurrence_datetime"),
                         "yes_sub": m.get("yes_sub_title"),
                         "no_sub": m.get("no_sub_title"),
                         "category": category,
@@ -409,10 +422,19 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                                        "yes_sub": None, "no_sub": None}
             meta = market_meta[tk]
 
+            # Earnings-mention markets: Kalshi leaves close_time months out as a
+            # placeholder until the market settles (Alphabet's Oct 29 call showed
+            # a Mar 2027 close), which tripped the 14-day rule on every one. The
+            # real date is occurrence_datetime.
+            em = (meta.get("category") == "Mentions"
+                  and is_earnings_mention(tk, meta.get("title")))
+            eff_close = (meta.get("occurrence") if em and meta.get("occurrence")
+                         else meta.get("close"))
+
             htc = None
-            if meta.get("close"):
+            if eff_close:
                 try:
-                    ct = datetime.fromisoformat(meta["close"].replace("Z", "+00:00"))
+                    ct = datetime.fromisoformat(eff_close.replace("Z", "+00:00"))
                     htc = (ct - datetime.now(timezone.utc)).total_seconds() / 3600.0
                     if htc < 0:
                         continue
@@ -425,10 +447,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
             if rules.is_crypto(tk, meta.get("title")):
                 continue
-            if meta.get("category") in BLOCKED_CATEGORIES:
-                if not (meta.get("category") == "Mentions"
-                        and is_earnings_mention(tk, meta.get("title"))):
-                    continue
+            if meta.get("category") in BLOCKED_CATEGORIES and not em:
+                continue
 
             score, reasons, hits = base.score(tk, size, price, htc)
             if score < threshold:
@@ -437,15 +457,19 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 continue
 
             ev = meta.get("event") or tk
-            if now - event_cd.get(ev, 0) < EVENT_COOLDOWN:
+            # Each word in an earnings call is its own independent bet, but
+            # Kalshi groups ~20 of them under one event. Deduping on the event
+            # would allow one word per call, so key them per market instead.
+            dk = tk if em else ev
+            if now - event_cd.get(dk, 0) < EVENT_COOLDOWN:
                 print("  EVENT-dedup skip: " + meta["title"][:50])
                 market_cd[tk] = now
                 continue
 
             fl = list(base.flow[tk])
             side_dir = "YES" if sum(fl) > 0 else "NO"
-            prev = event_side.get(ev)
-            if prev and prev != side_dir and now - event_cd.get(ev, 0) < SIDE_FLIP_WINDOW:
+            prev = event_side.get(dk)
+            if prev and prev != side_dir and now - event_cd.get(dk, 0) < SIDE_FLIP_WINDOW:
                 print("  SIDE-FLIP skip: " + meta["title"][:45])
                 market_cd[tk] = now
                 continue
@@ -457,8 +481,8 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             entry_c = round(price * 100) if side_dir == "YES" else round((1 - price) * 100)
             now_iso = datetime.now(timezone.utc).isoformat()
             why = rules.reject_reason(tk, meta.get("title"), side_dir, entry_c,
-                                      meta.get("close"), now_iso,
-                                      prior_event_alerts(con, ev))
+                                      eff_close, now_iso,
+                                      prior_event_alerts(con, dk))
             if why:
                 print("  RULE skip ({}): {} {}@{}c".format(why, meta["title"][:40],
                                                           side_dir, entry_c))
@@ -495,11 +519,11 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 con.execute(
                     "INSERT INTO alerts (ts,ticker,event_ticker,title,side,entry_cents,"
                     "score,reasons,link,contracts,close_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (now_iso, tk, ev, meta["title"], side_dir, entry_c, score,
-                     " | ".join(reasons), link, size, meta.get("close")))
+                    (now_iso, tk, dk, meta["title"], side_dir, entry_c, score,
+                     " | ".join(reasons), link, size, eff_close))
                 con.commit()
-                event_cd[ev] = now
-                event_side[ev] = side_dir
+                event_cd[dk] = now
+                event_side[dk] = side_dir
             market_cd[tk] = now
 
         if poll % 10 == 1:
