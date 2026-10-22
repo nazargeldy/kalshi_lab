@@ -195,6 +195,65 @@ def is_trump(t):
     return "TRUMP" in series_of(t).upper()
 
 
+# Owner's watchlist: ping on EVERY trade in these markets, regardless of score,
+# rules or DAILY_CAP. Matched on ticker or title, so new series are picked up
+# automatically. Watch pings never touch the alerts table, so they don't open
+# paper positions.
+WATCH_TERMS = ("PANW", "PALO ALTO")
+WATCH_BIG_USD = 100          # trades at least this size get a whale marker
+
+
+def is_watched(ticker, title=""):
+    hay = ((ticker or "") + " " + (title or "")).upper()
+    return any(w in hay for w in WATCH_TERMS)
+
+
+def format_watch(batch):
+    """One Telegram message for all watched trades seen in a poll.
+    batch: [(trade, meta), ...] oldest first. Returns (title, body, link)."""
+    by_market = {}
+    for t, meta in batch:
+        by_market.setdefault(t.get("ticker"), (meta, []))[1].append(t)
+
+    first_tk, (first_meta, _) = next(iter(by_market.items()))
+    total_usd, lines = 0.0, []
+    for tk, (meta, trades) in by_market.items():
+        lines.append("\U0001F5E3️ **“{}”**".format(meta.get("yes_sub") or tk))
+        for t in trades:
+            n = float(t.get("count_fp") or 0)
+            yes_p = float(t.get("yes_price_dollars") or 0)
+            if t.get("taker_side") == "yes":
+                icon, side, p = "\U0001F7E2", "YES", yes_p
+            else:
+                icon, side = "\U0001F534", "NO"
+                p = float(t.get("no_price_dollars") or (1 - yes_p))
+            usd = n * p
+            total_usd += usd
+            whale = "  \U0001F40B" if usd >= WATCH_BIG_USD else ""
+            lines.append("{} Bought **{}** · {:,.0f} @ {:.0f}¢ = **${:,.2f}**{}".format(
+                icon, side, n, p * 100, usd, whale))
+        lines.append("   Now ≈ YES {:.0f}¢".format(
+            float(trades[-1].get("yes_price_dollars") or 0) * 100))
+        lines.append("")
+
+    head = ["**" + (first_meta.get("title") or first_tk) + "**"]
+    occ = first_meta.get("occurrence")
+    if occ:
+        try:
+            h = (datetime.fromisoformat(occ.replace("Z", "+00:00"))
+                 - datetime.now(timezone.utc)).total_seconds() / 3600.0
+            head.append("⏱️ Event " + _fmt_close(h) if h > 0 else "⏱️ Event underway / done")
+        except Exception:
+            pass
+    head.append("")
+
+    n_tr = len(batch)
+    title = "\U0001F440 PANW WATCH · {} new trade{} · ${:,.0f}".format(
+        n_tr, "" if n_tr == 1 else "s", total_usd)
+    body = "\n".join(head + lines) + "\n\U0001F552 " + datetime.now(timezone.utc).strftime("%H:%M UTC")
+    return title, body, kalshi_url(series_of(first_tk), first_meta.get("event"))
+
+
 DASHBOARD_URL = os.getenv(
     "PAPER_DASHBOARD_URL", "https://nazargeldy.github.io/kalshi-paper-trader/")
 
@@ -373,6 +432,7 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             seen = set(list(seen)[-10000:])
 
         fresh = 0
+        watch_batch = []
         for t in reversed(new):
             tk = t.get("ticker")
             if (not tk or is_junk(tk) or is_sports(tk) or is_direction(tk)
@@ -416,6 +476,10 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                     market_meta[tk] = {"title": tk, "event": None, "close": None,
                                        "yes_sub": None, "no_sub": None}
             meta = market_meta[tk]
+            # Poll 1 replays the last 200 trades, which were already pinged
+            # before a restart.
+            if poll > 1 and is_watched(tk, meta.get("title")):
+                watch_batch.append((t, meta))
 
             # Earnings-mention markets: Kalshi leaves close_time months out as a
             # placeholder until the market settles (Alphabet's Oct 29 call showed
@@ -520,6 +584,12 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
                 event_cd[dk] = now
                 event_side[dk] = side_dir
             market_cd[tk] = now
+
+        if watch_batch:
+            w_title, w_body, w_link = format_watch(watch_batch)
+            print("WATCH " + w_title)
+            if not dry_run:
+                notify(w_title, w_body, w_link)
 
         if poll % 10 == 1:
             print("poll {}: {} new trades | tracking {} markets | alerts today {}/{}".format(
