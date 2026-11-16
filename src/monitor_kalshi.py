@@ -24,6 +24,7 @@ Guardrails carried over from the previous project's expensive mistakes:
 """
 import argparse
 import os
+import re
 import sqlite3
 import statistics
 import sys
@@ -193,6 +194,36 @@ def is_direction(ticker, title=""):
 
 def is_trump(t):
     return "TRUMP" in series_of(t).upper()
+
+
+_TICKER_DATE = re.compile(r"-(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})(?:-|$)")
+
+
+def ticker_date(event_ticker):
+    """'KXEARNINGSMENTIONPANW-26NOV18' -> '2026-11-18T23:59:00+00:00' (end of
+    day, so the call itself is never treated as already past)."""
+    m = _TICKER_DATE.search((event_ticker or "").upper())
+    if not m:
+        return None
+    try:
+        d = datetime.strptime(m.group(1) + m.group(2) + m.group(3), "%y%b%d")
+    except ValueError:
+        return None
+    return d.replace(hour=23, minute=59, tzinfo=timezone.utc).isoformat()
+
+
+def earliest_date(*isos):
+    best = None
+    for s in isos:
+        if not s:
+            continue
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if best is None or dt < best[0]:
+            best = (dt, s)
+    return best[1] if best else None
 
 
 # Owner's watchlist: ping on EVERY trade in these markets, regardless of score,
@@ -484,11 +515,13 @@ def run(dry_run=False, once=False, threshold=ALERT_THRESHOLD):
             # Earnings-mention markets: Kalshi leaves close_time months out as a
             # placeholder until the market settles (Alphabet's Oct 29 call showed
             # a Mar 2027 close), which tripped the 14-day rule on every one. The
-            # real date is occurrence_datetime.
+            # real date is occurrence_datetime - except when that is a placeholder
+            # too (Palo Alto's Nov 18 call showed Feb 2027), so take the earlier
+            # of it and the date in the event ticker.
             em = (meta.get("category") == "Mentions"
                   and rules.is_earnings_mention(tk, meta.get("title")))
-            eff_close = (meta.get("occurrence") if em and meta.get("occurrence")
-                         else meta.get("close"))
+            eff_close = (earliest_date(meta.get("occurrence"), ticker_date(meta.get("event")))
+                         if em else None) or meta.get("close")
 
             htc = None
             if eff_close:

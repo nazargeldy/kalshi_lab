@@ -40,13 +40,12 @@ CRYPTO_PRICE_HINTS = ("price", "above", "below", "reach $", "hit $", "$")
 MIN_ENTRY_CENTS = 25
 MAX_ENTRY_CENTS = 88
 
-# Never enter a market that settles more than this far out.
-MAX_DAYS_TO_CLOSE = 14
-
-# Earnings-call word markets get a longer window: Kalshi lists them weeks ahead
-# and only ~1 call was inside 14 days at the start of Q3 earnings season.
-# Callers must pass the call date (occurrence_datetime) as close_ts for these.
-EARNINGS_MAX_DAYS_TO_CLOSE = 30
+# Never enter a market that settles more than this far out. For earnings-call
+# word markets callers must pass the call date, not Kalshi's placeholder close.
+# 14 -> 30 on 2026-11-16: the 14-day rule was the single biggest blocker (368
+# skips in 5 weeks, 4x the 92 alerts sent) while ~90% of the paper account sat
+# in cash, so the capital lock-up it guarded against wasn't happening.
+MAX_DAYS_TO_CLOSE = 30
 
 # One position per event: no second entry on an event we already hold, never
 # the opposite side of an event we have ever taken, and no re-entry within
@@ -121,10 +120,8 @@ def reject_reason(ticker, title, side, entry_c, close_ts, at_ts, prior_event_ale
     htc = hours_to_close(close_ts, at_ts)
     if htc is None:
         return "close time unknown"
-    max_days = (EARNINGS_MAX_DAYS_TO_CLOSE if is_earnings_mention(ticker, title)
-                else MAX_DAYS_TO_CLOSE)
-    if htc > max_days * 24:
-        return "settles >{}d out".format(max_days)
+    if htc > MAX_DAYS_TO_CLOSE * 24:
+        return "settles >{}d out".format(MAX_DAYS_TO_CLOSE)
     now = parse_ts(at_ts)
     for pts, pside, presult in prior_event_alerts:
         if presult not in ("WIN", "LOSS"):
