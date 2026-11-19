@@ -230,7 +230,7 @@ def earliest_date(*isos):
 # rules or DAILY_CAP. Matched on ticker or title, so new series are picked up
 # automatically. Watch pings never touch the alerts table, so they don't open
 # paper positions.
-WATCH_TERMS = ("PANW", "PALO ALTO")
+WATCH_TERMS = ()            # empty = watchlist off; e.g. ("PANW", "PALO ALTO")
 WATCH_BIG_USD = 100          # trades at least this size get a whale marker
 
 
