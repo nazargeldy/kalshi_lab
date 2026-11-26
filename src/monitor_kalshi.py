@@ -57,7 +57,12 @@ DB = os.path.join(ROOT, "data", "kalshi_alerts.db")
 # for crypto/weather and "75 from anomaly signals" for everything else - which
 # made a YES alert on any market closing >3 days out mathematically impossible
 # (ceiling 35+22+20-8 = 69). Threshold is now 60 for every category alike.
-ALERT_THRESHOLD = 60
+# 2026-11-26: 60 -> 65. The 60-64 band (34 of 35 at exactly 61, mostly YES
+# alerts that only just cleared the bar after the YES penalty) went 12-15
+# (-$150) through Nov 16, then 0-8 (-$461) on data not seen when it was first
+# flagged. Every other band was profitable. This trims the weakest marginal
+# alerts at the bottom; it does not chase the top of the score range.
+ALERT_THRESHOLD = 65
 DAILY_CAP = 10   # was 8; raised 2026-10-11 now that weather no longer eats the cap
 MARKET_COOLDOWN = 3600
 EVENT_COOLDOWN = 4 * 3600
